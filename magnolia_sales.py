@@ -3,6 +3,7 @@
 Setup: python3 -m pip install -r requirements.txt
 Run:   python3 magnolia_sales.py --days 30
        python3 magnolia_sales.py --days 14 --as-of 2026-10-01
+       python3 magnolia_sales.py --days 30 --output sales.json
 """
 
 import argparse
@@ -241,6 +242,32 @@ def combine_records(
     return [{**parcels.get(sale["PIN"], {}), **sale} for sale in sales]
 
 
+def save_json(records: list[dict[str, Any]], filename: str) -> None:
+    """Save combined records as readable JSON without changing the inputs.
+
+    Args:
+        records: Combined sales/parcel dictionaries from combine_records,
+            with a Python date in each SaleDate field. An empty list is valid.
+        filename: Output file path. Its parent directory must already exist;
+            an existing file is overwritten.
+
+    Returns:
+        None. Writes a UTF-8 JSON list with full, unshortened field values.
+        SaleDate values become YYYY-MM-DD strings; an empty list writes [].
+
+    Raises:
+        OSError: The output file could not be opened or written.
+        TypeError: A record contains a value that JSON cannot serialize.
+    """
+    data = [
+        {**record, "SaleDate": record["SaleDate"].isoformat()}
+        for record in records
+    ]
+    with open(filename, "w", encoding="utf-8") as output_file:
+        json.dump(data, output_file, indent=2, ensure_ascii=False)
+        output_file.write("\n")
+
+
 def format_value(value: Any, style: str = "text", width: int = 28) -> str:
     """Convert one record value into a printable table cell.
 
@@ -349,7 +376,7 @@ def print_report(
 
 
 def main(argv: list[str] | None = None) -> int:
-    """Read CLI arguments, fetch and join API data, and print the report.
+    """Read CLI arguments, fetch/join API data, and print or export the report.
 
     Args:
         argv: Argument strings such as ['--days', '7'], excluding the script
@@ -357,8 +384,9 @@ def main(argv: list[str] | None = None) -> int:
 
     Returns:
         Exit code 0 for a successful report, empty results, or --help;
-        exit code 1 for invalid arguments or a request/data error. Prints
+        exit code 1 for invalid arguments or a request/data/file error. Prints
         report/help text to standard output and errors to standard error.
+        Also saves the combined records when --output FILE is provided.
     """
     parser = argparse.ArgumentParser(
         description="Print recent recorded property sales in Seattle's Magnolia neighborhood."
@@ -367,6 +395,8 @@ def main(argv: list[str] | None = None) -> int:
                         help="number of calendar dates to include; default: 30")
     parser.add_argument("--as-of", type=date.fromisoformat, default=date.today(),
                         metavar="YYYY-MM-DD", help="final reporting date; default: today")
+    parser.add_argument("--output", metavar="FILE",
+                        help="also save full records as JSON (overwrites FILE)")
     try:
         # argparse normally uses exit code 2 for invalid arguments; use 1 consistently.
         try:
@@ -378,7 +408,11 @@ def main(argv: list[str] | None = None) -> int:
         sales = fetch_recent_sales(geometry, args.days, args.as_of)
         parcels = fetch_parcels([sale["PIN"] for sale in sales])
         records = combine_records(sales, parcels)
+        if args.output is not None:
+            save_json(records, args.output)
         print_report(records, parcels, args.days, args.as_of)
+        if args.output is not None:
+            print(f"\nSaved JSON to {args.output}")
         return 0
     except (requests.RequestException, ValueError, KeyError, TypeError,
             AttributeError, OverflowError, OSError) as exc:
